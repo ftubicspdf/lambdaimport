@@ -6,7 +6,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/kelseyhightower/envconfig"
 	"io"
 	"net/http"
@@ -65,7 +65,6 @@ func cache(src io.Reader) (*os.File, error) {
 
 func HandleRequest(ctx context.Context, event ImportEvent) (string, error) {
 	sess := session.Must(session.NewSession())
-	s3Client := s3.New(sess)
 
 	response, err := download(event.URL, event.Headers)
 	if err != nil {
@@ -89,16 +88,24 @@ func HandleRequest(ctx context.Context, event ImportEvent) (string, error) {
 		}
 	}(fp.Name())
 
-	out, err := s3Client.PutObjectWithContext(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(cfg.S3FileBucket),
-		Key:    aws.String(event.FileName),
-		Body:   fp,
+	uploader := s3manager.NewUploader(sess, func(u *s3manager.Uploader) {
+		u.PartSize = 5 * 1024 * 1024 // The minimum/default allowed part size is 5MB
+		u.Concurrency = 5            // default is 5
 	})
+
+	result, err := uploader.UploadWithContext(
+		ctx,
+		&s3manager.UploadInput{
+			Bucket: aws.String(cfg.S3FileBucket),
+			Key:    aws.String(event.FileName),
+			Body:   fp,
+		},
+	)
 	if err != nil {
 		return "", err
 	}
 
-	return out.String(), nil
+	return result.Location, nil
 }
 
 func main() {
